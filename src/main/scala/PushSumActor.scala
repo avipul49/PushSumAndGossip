@@ -12,19 +12,32 @@ import java.util.Random
 
 object Node{
   case class ConnectedNodes(nodes : Array[String])
+  case class Connect(node: String)
   case class Sum(sum : Double, weight: Double)
   case object Start
   case class Weight(value :Double)
 }
+
+object GossipNode{
+  case class ConnectedNodes(nodes : Array[String])
+  case class Roumor(message:String)
+  case class Start(message:String)
+}
+
 class Node(name:String,value : Double) extends Actor{
   var sum = value;
   var weight = 0.0;
-  var connectedNodes = new Array[String](1)
+  var connectedNodes: Seq[String] = Seq()
   var messageCount = 0;
-  var lastValues = new Array[Int](2)
+  var messageMap: Map[String,Int] = Map()
+
   def receive = {
     case Node.ConnectedNodes(nodes) =>
-      connectedNodes = nodes;
+      connectedNodes ++= nodes;
+
+    case Node.Connect(node) =>
+      connectedNodes :+= node
+
     case Node.Sum(s,w) => 
       var last = sum/weight;
       sum += s;
@@ -37,14 +50,27 @@ class Node(name:String,value : Double) extends Actor{
 
       println(name+": "+(sum/weight))
      
-      if(messageCount < 3){
+      if(messageCount < 4){
         pushSum();
       }
     case Node.Start =>
+      weight = 1.0
       pushSum();
      
     case Node.Weight(v : Double) =>
       weight = v
+
+    case GossipNode.Roumor(message) => 
+      val n = messageMap.getOrElse(message, 0)
+      messageMap+=(message -> (n+1))
+      println(name + ": " + message+ " " +(n+1))
+
+      if(n < 10){
+        sendRoumor(message)
+      }
+      
+    case GossipNode.Start(message) =>
+      sendRoumor(message)
   }
 
   def pushSum(){
@@ -52,5 +78,11 @@ class Node(name:String,value : Double) extends Actor{
     context.actorSelection("../"+connectedNodes(indexToSend)) ! Node.Sum(sum/2,weight/2);
     sum = sum/2
     weight = weight/2
+  }
+
+
+  def sendRoumor(message : String) = {
+    var indexToSend = new Random().nextInt(connectedNodes.size)
+    context.actorSelection("../"+connectedNodes(indexToSend))  ! GossipNode.Roumor(message);
   }
 }
