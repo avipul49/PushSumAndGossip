@@ -9,6 +9,12 @@ import com.typesafe.config.ConfigFactory
 import scala.collection.mutable.ArrayBuffer
 import akka.actor.Terminated
 import java.util.Random
+import akka.util.Timeout
+import scala.concurrent.duration.FiniteDuration
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.Future;
+import scala.util.Success
+import scala.util.Failure
 
 object Node{
   case class ConnectedNodes(nodes : Array[String])
@@ -16,6 +22,7 @@ object Node{
   case class Sum(sum : Double, weight: Double)
   case object Start
   case class Weight(value :Double)
+  case object Stop
 }
 
 object GossipNode{
@@ -50,8 +57,10 @@ class Node(name:String,value : Double) extends Actor{
 
       println(name+": "+(sum/weight))
      
-      if(messageCount < 4){
+      if(messageCount < 3 ){
         pushSum();
+      }else{
+        context.actorSelection("../Watcher") ! Watcher.Completed;
       }
     case Node.Start =>
       weight = 1.0
@@ -67,22 +76,56 @@ class Node(name:String,value : Double) extends Actor{
 
       if(n < 10){
         sendRoumor(message)
+      }else{
+          context.actorSelection("../Watcher") ! Watcher.Completed;
       }
       
     case GossipNode.Start(message) =>
       sendRoumor(message)
+
+    case Node.Stop =>
+      println("Stop");
+      context.stop(self)
   }
 
-  def pushSum(){
-    var indexToSend = new Random().nextInt(connectedNodes.size)
-    context.actorSelection("../"+connectedNodes(indexToSend)) ! Node.Sum(sum/2,weight/2);
-    sum = sum/2
-    weight = weight/2
+  def pushSum()  {
+   
+      sum = sum/2
+      weight = weight/2
+      sendMessage(sum,weight)
+  }
+
+  def sendMessage(sum : Double, weight : Double) : Boolean = {
+    if(connectedNodes.size != 0){
+      var indexToSend = new Random().nextInt(connectedNodes.size)
+      implicit val timeout = FiniteDuration(1,"seconds")
+
+      context.actorSelection("../"+connectedNodes(indexToSend)).resolveOne(timeout).onComplete {
+
+        case Success(actor) => 
+          actor ! Node.Sum(sum,weight);
+          
+        case Failure(ex) =>
+          connectedNodes = connectedNodes.filter (_ != connectedNodes(indexToSend))
+          sendMessage(sum,weight)
+
+      }
+
+    }
+    return false;
   }
 
 
-  def sendRoumor(message : String) = {
+  def sendRoumor(message : String):Boolean = {
     var indexToSend = new Random().nextInt(connectedNodes.size)
-    context.actorSelection("../"+connectedNodes(indexToSend))  ! GossipNode.Roumor(message);
+    implicit val timeout = FiniteDuration(1,"seconds")
+    context.actorSelection("../"+connectedNodes(indexToSend)).resolveOne(timeout).onComplete {
+      case Success(actor) => actor ! GossipNode.Roumor(message);
+        
+      case Failure(ex) =>
+         sendRoumor(message)
+
+    }
+    return false;
   }
 }
