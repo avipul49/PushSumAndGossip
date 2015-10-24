@@ -19,21 +19,26 @@ object Project3 extends App {
   entryPoint ! Node.Init
   val n = args(0).toInt
   val m = args(1)
-
+  var max = 20;
+  var nodes = new Array[String](n) 
   for(i <- 1 until n+1){
-    val nodeName = ""+i
-    val nnode = system.actorOf(Props(new Node(nodeName)), name = nodeName)
-  }
 
+    var nodeName = ""+(new Random().nextInt(1 << max - 1))
+    while(nodes contains nodeName){
+      nodeName = ""+(new Random().nextInt(1 << max - 1))
+    }
+    nodes(i-1) = nodeName
+    val nnode = system.actorOf(Props(new Node(nodeName)), name = nodeName)
+    nnode ! Node.Start
+    // entryPoint ! Node.Join(nodeName)
+  }
   entryPoint ! Node.Start
 
-  for(i <- 1 until n+1){
-    val nodeName = ""+i
-    entryPoint ! Node.Join(i+"")
+  for(i <- 0 until n){
+    entryPoint ! Node.Join(nodes(i))
   }
 
-
-  for(i <- 0 until n+1){
-    system.actorSelection("user/"+i) ! Node.Print
-  }
+  // for(i <- 0 until n+1){
+  //   system.actorSelection("user/"+i) ! Node.Print
+  // }
 }
