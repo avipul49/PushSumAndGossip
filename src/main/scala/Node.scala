@@ -38,27 +38,32 @@ object Settings{
 	val MaxNodes = 20;
 }
 
-class Node(id: String) extends Actor{
+class Node(id: String, maxNodes : Int) extends Actor{
   var m = 20;
   var k = 5;
   var predecessor : String = null
   var fingerTable = new Array[String](m)
   val heartBeat:FiniteDuration = FiniteDuration(1,"milliseconds")
   var messageScheduler : Cancellable = null
+  var fixFingerScheduler : Cancellable = null
+  var stabilizeScheduler : Cancellable = null
+  var scount = 0
+  var fcount = 0
+  var sum = 0.0
   def receive = {
   	case Node.Init =>
   		fingerTable(0) = id
   		predecessor = id 
 
   	case Node.Start => 
-		  //context.system.scheduler.schedule(FiniteDuration(0,"milliseconds"), heartBeat, self, Node.Stabilize)
-  		context.system.scheduler.schedule(FiniteDuration(0,"milliseconds"), 10 * heartBeat, self, Node.FixFingers)
+		  //fixFingerScheduler = context.system.scheduler.schedule(FiniteDuration(0,"milliseconds"), heartBeat, self, Node.Stabilize)
+  		fixFingerScheduler = context.system.scheduler.schedule(FiniteDuration(0,"milliseconds"), 10 * heartBeat, self, Node.FixFingers)
   	  messageScheduler = context.system.scheduler.schedule(FiniteDuration(5,"seconds"), FiniteDuration(1,"milliseconds"), self, Node.StartFindKey)
 
   	case Node.Join(node) =>
   		findSuccessor(node)
   	case Node.Successor(node) =>
-  		println("-------- "+node);
+  		println(id+"->"+node);
   		fingerTable(0) = node
   		context.actorSelection("../"+node) ! Node.Predecessor(id)
   	case Node.Predecessor(node) =>
@@ -81,30 +86,38 @@ class Node(id: String) extends Actor{
         fingerTable(0) = predecessorNode;
         context.actorSelection("../"+predecessorNode) ! Node.Inform(id)
       }
-
+      scount += 1
+      if(scount == m*50){
+        stabilizeScheduler.cancel();
+      }
     case Node.Inform(informedId) =>
       if(isInRange(Hash.key(predecessor),Hash.key(id),Hash.key(informedId)))
         predecessor = informedId;
 
   	case Node.FixFingers =>
-  		val fingerIndex = new Random().nextInt(20)
-  		context.actorSelection("../"+fingerTable(0)) ! Node.FindSuccessor(id,fingerIndex)
-
+      if(fingerTable(0)!=null){
+  		  val fingerIndex = new Random().nextInt(m-1) + 1
+  		  context.actorSelection("../"+fingerTable(0)) ! Node.FindSuccessor(id,fingerIndex)
+      }
   	case Node.FindSuccessor(source,fingerIndex) =>
       if(fingerTable(0)!=null&&id!=null){
-
     		val key = (Hash.key(source) + 1 << fingerIndex)% (1 << m); 
-
     		if(isInRange(Hash.key(id),Hash.key(fingerTable(0)),key)){
     			val newNode = context.actorSelection("../"+source);
           newNode ! Node.SetFinger(fingerIndex,fingerTable(0))
     		}else{
-    			val successor = closestPrecedingFinger(key)
+    			var successor = closestPrecedingFinger(key)
+          if(successor == null)
+            successor = fingerTable(0)
     			context.actorSelection("../"+successor) ! Node.FindSuccessor(source,fingerIndex)
     		}
       }
   	case Node.SetFinger(index,node) =>
   		fingerTable(index) = node;
+      fcount += 1
+      if(fcount == m*50){
+        fixFingerScheduler.cancel();
+      }
   	case Node.StartFindKey => 
   		if(fingerTable(0)!=null){
   			val key = new Random().nextInt(1 << m - 1)
@@ -112,36 +125,43 @@ class Node(id: String) extends Actor{
   		}
   	case Node.FindKey(key:Int,hops: Int,source:String) =>
       if(fingerTable(0)!=null&&id!=null){
-      		if(isInRange(Hash.key(id),Hash.key(fingerTable(0)),key)){
-      			val newNode = context.actorSelection("../"+source);
-    			newNode ! Node.KeyFound(fingerTable(0),key,hops+1)
-    		}else{
-    			val successor = closestPrecedingFinger(key)
-    			context.actorSelection("../"+successor) ! Node.FindKey(key,hops+1,source)
-    		}
+    		if(isInRange(Hash.key(id),Hash.key(fingerTable(0)),key)){
+    			val newNode = context.actorSelection("../"+source);
+  			  newNode ! Node.KeyFound(fingerTable(0),key,hops+1)
+  		  }else{
+    			var successor = closestPrecedingFinger(key)
+          if(successor == null)
+            successor = fingerTable(0)
+      		context.actorSelection("../"+successor) ! Node.FindKey(key,hops+1,source)
+  		  }
       }
   	case Node.KeyFound(target:String,key:Int,hops: Int) =>
   		k = k-1
+      sum+=hops;
   		if(k==0){
-        println("Source "+id+" key found "+key+" target "+target+" in "+hops)
+        context.actorSelection("../Watcher") ! Watcher.Completed(id,sum/maxNodes);
   			messageScheduler.cancel()
       }
   }
 
   def findSuccessor(node : String) = {
-  	var found = false;
-  	var successor = fingerTable(0)
-  	if(Hash.key(successor) == Hash.key(id) || isInRange(Hash.key(id),Hash.key(successor),Hash.key(node))){
-  		found = true;	
-  	}
-  	if(found){
-  		val newNode = context.actorSelection("../"+node)
-  		newNode ! Node.Successor(successor)
-  		newNode ! Node.Predecessor(id)
-  		fingerTable(0) = node;
-    }else{
-  		successor = closestPrecedingFinger(Hash.key(node))
-  		context.actorSelection("../"+successor) ! Node.Join(node)
+    if(node!=null){
+    	var found = false;
+    	var successor = fingerTable(0)
+    	if(Hash.key(successor) == Hash.key(id) || isInRange(Hash.key(id),Hash.key(successor),Hash.key(node))){
+    		found = true;	
+    	}
+    	if(found){
+    		val newNode = context.actorSelection("../"+node)
+    		newNode ! Node.Successor(successor)
+    		newNode ! Node.Predecessor(id)
+    		fingerTable(0) = node;
+      }else{
+    		successor = closestPrecedingFinger(Hash.key(node))
+        if(successor == null)
+          successor = fingerTable(0)
+    		context.actorSelection("../"+successor) ! Node.Join(node)
+      }
     }
   }
 
