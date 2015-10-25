@@ -43,7 +43,7 @@ class Node(id: String, maxNodes : Int) extends Actor{
   var k = 5;
   var predecessor : String = null
   var fingerTable = new Array[String](m)
-  val heartBeat:FiniteDuration = FiniteDuration(1,"milliseconds")
+  val heartBeat:FiniteDuration = FiniteDuration(5,"milliseconds")
   var messageScheduler : Cancellable = null
   var fixFingerScheduler : Cancellable = null
   var stabilizeScheduler : Cancellable = null
@@ -56,9 +56,9 @@ class Node(id: String, maxNodes : Int) extends Actor{
   		predecessor = id 
 
   	case Node.Start => 
-		  //fixFingerScheduler = context.system.scheduler.schedule(FiniteDuration(0,"milliseconds"), heartBeat, self, Node.Stabilize)
-  		fixFingerScheduler = context.system.scheduler.schedule(FiniteDuration(0,"milliseconds"), 10 * heartBeat, self, Node.FixFingers)
-  	  messageScheduler = context.system.scheduler.schedule(FiniteDuration(5,"seconds"), FiniteDuration(1,"milliseconds"), self, Node.StartFindKey)
+		  // stabilizeScheduler = context.system.scheduler.schedule(FiniteDuration(3,"milliseconds"), heartBeat, self, Node.Stabilize)
+  		fixFingerScheduler = context.system.scheduler.schedule(FiniteDuration(3,"milliseconds"), 5 * heartBeat, self, Node.FixFingers)
+      messageScheduler = context.system.scheduler.schedule(FiniteDuration(5,"seconds"), FiniteDuration(50,"milliseconds"), self, Node.StartFindKey)
 
   	case Node.Join(node) =>
   		findSuccessor(node)
@@ -82,25 +82,37 @@ class Node(id: String, maxNodes : Int) extends Actor{
       context.actorSelection("../"+node) ! Node.PredecessorNode(predecessor)
 
     case Node.PredecessorNode(predecessorNode) =>
-      if(isInRange(Hash.key(id),Hash.key(fingerTable(0)),Hash.key(predecessorNode))){
-        fingerTable(0) = predecessorNode;
-        context.actorSelection("../"+predecessorNode) ! Node.Inform(id)
-      }
-      scount += 1
-      if(scount == m*50){
-        stabilizeScheduler.cancel();
+      if(fingerTable(0)!=null){
+        if(isInRange(Hash.key(id),Hash.key(fingerTable(0)),Hash.key(predecessorNode))){
+          fingerTable(0) = predecessorNode;
+          context.actorSelection("../"+predecessorNode) ! Node.Inform(id)
+        }
+        scount += 1
+        if(scount == m*50){
+          stabilizeScheduler.cancel();
+        }
       }
     case Node.Inform(informedId) =>
-      if(isInRange(Hash.key(predecessor),Hash.key(id),Hash.key(informedId)))
-        predecessor = informedId;
-
+      if(predecessor!=null){
+        if(isInRange(Hash.key(predecessor),Hash.key(id),Hash.key(informedId)))
+          predecessor = informedId;
+      }
   	case Node.FixFingers =>
       if(fingerTable(0)!=null){
-  		  val fingerIndex = new Random().nextInt(m-1) + 1
+  		  val fingerIndex = new Random().nextInt(m)
   		  context.actorSelection("../"+fingerTable(0)) ! Node.FindSuccessor(id,fingerIndex)
+        fcount += 1
+        if(fcount == m*30){
+          // println(id+" slowing fixing")
+          context.actorSelection("../Watcher") ! Watcher.Fixed(id);
+          fixFingerScheduler.cancel();
+          // fixFingerScheduler = context.system.scheduler.schedule(FiniteDuration(30,"milliseconds"), 1000 * heartBeat, self, Node.FixFingers)
+          // fcount = 0
+        }
       }
   	case Node.FindSuccessor(source,fingerIndex) =>
       if(fingerTable(0)!=null&&id!=null){
+
     		val key = (Hash.key(source) + 1 << fingerIndex)% (1 << m); 
     		if(isInRange(Hash.key(id),Hash.key(fingerTable(0)),key)){
     			val newNode = context.actorSelection("../"+source);
@@ -113,15 +125,14 @@ class Node(id: String, maxNodes : Int) extends Actor{
     		}
       }
   	case Node.SetFinger(index,node) =>
+      // println(id+" fixing " + index)
   		fingerTable(index) = node;
-      fcount += 1
-      if(fcount == m*50){
-        fixFingerScheduler.cancel();
-      }
+  
   	case Node.StartFindKey => 
   		if(fingerTable(0)!=null){
   			val key = new Random().nextInt(1 << m - 1)
   			self ! Node.FindKey(key,0,id)
+
   		}
   	case Node.FindKey(key:Int,hops: Int,source:String) =>
       if(fingerTable(0)!=null&&id!=null){

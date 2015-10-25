@@ -16,11 +16,13 @@ import scala.concurrent.ExecutionContext.Implicits.global
 
 object  Watcher {
   case class Completed(node:String,hops:Double);
+  case class Fixed(node:String)
 }
 
 class Watcher(n:Int) extends Actor{
   var r = 0;
   var sum = 0.0;
+  var fixed = 0;
   def receive = {
     case Watcher.Completed(node,hops) =>
       println(r+"-> Avg hops for node: "+node+" is "+hops);
@@ -29,6 +31,9 @@ class Watcher(n:Int) extends Actor{
       if(r==n){
         println("Finished with total avg "+(sum/n));
       }
+    case Watcher.Fixed(node) => 
+      println(fixed+"=> "+node);
+      fixed += 1
   }
 }
 
@@ -51,13 +56,13 @@ object Project3 extends App {
     }
     nodes(i-1) = nodeName
     val nnode = system.actorOf(Props(new Node(nodeName,m)), name = nodeName)
-    nnode ! Node.Start
-    // entryPoint ! Node.Join(nodeName)
+    entryPoint ! Node.Join(nodeName)
+    // nnode ! Node.Start
   }
   entryPoint ! Node.Start
 
   for(i <- 0 until n){
-    entryPoint ! Node.Join(nodes(i))
+    system.actorSelection("user/"+nodes(i)) ! Node.Start
   }
 
   // for(i <- 0 until n+1){
